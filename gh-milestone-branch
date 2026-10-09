@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+usage:
+  gh milestone-branch branch <milestone>
+  gh milestone-branch switch <milestone> <new-branch>
+EOF
+  exit 2
+}
+
+# Print the head branches of the milestone's PRs, one per line.
+cmd_branch() {
+  local milestone="${1//\"/\\\"}"
+
+  # Disable gh's pager so the command prints and returns immediately.
+  GH_PAGER=cat gh pr list \
+    --search "milestone:\"$milestone\"" \
+    --state all \
+    --json headRefName,baseRefName \
+    --limit 200 \
+    --jq '[.[].baseRefName] as $bases | .[] | select(.headRefName as $h | $bases | index($h) | not) | .headRefName'
+}
+
+# Create <new-branch> from the milestone's head branch and switch to it.
+cmd_switch() {
+  local milestone="$1" new_branch="$2" tips tip start
+
+  tips="$(cmd_branch "$milestone")"
+  if [ -z "$tips" ]; then
+    echo "error: no head branch found for milestone '$milestone'" >&2
+    exit 1
+  fi
+  if [ "$(printf '%s\n' "$tips" | wc -l)" -gt 1 ]; then
+    echo "error: several head branches for milestone '$milestone':" >&2
+    printf '  %s\n' $tips >&2
+    exit 1
+  fi
+  tip="$tips"
+
+  if git show-ref --verify --quiet "refs/heads/$tip"; then
+    start="$tip"
+  elif git show-ref --verify --quiet "refs/remotes/origin/$tip"; then
+    start="origin/$tip"
+  else
+    echo "error: branch '$tip' exists neither locally nor on origin" >&2
+    exit 1
+  fi
+
+  git switch -c "$new_branch" "$start"
+}
+
+case "${1:-}" in
+  branch) [ $# -eq 2 ] || usage; cmd_branch "$2" ;;
+  switch) [ $# -eq 3 ] || usage; cmd_switch "$2" "$3" ;;
+  *) usage ;;
+esac
